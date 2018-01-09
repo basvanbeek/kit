@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 
 	stdopentracing "github.com/opentracing/opentracing-go"
+	stdzipkin "github.com/openzipkin/zipkin-go"
 	"github.com/sony/gobreaker"
 	oldcontext "golang.org/x/net/context"
 	"golang.org/x/time/rate"
@@ -17,6 +18,7 @@ import (
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/ratelimit"
 	"github.com/go-kit/kit/tracing/opentracing"
+	"github.com/go-kit/kit/tracing/zipkin"
 	grpctransport "github.com/go-kit/kit/transport/grpc"
 
 	"github.com/go-kit/kit/examples/addsvc/pb"
@@ -30,22 +32,32 @@ type grpcServer struct {
 }
 
 // NewGRPCServer makes a set of endpoints available as a gRPC AddServer.
-func NewGRPCServer(endpoints addendpoint.Set, tracer stdopentracing.Tracer, logger log.Logger) pb.AddServer {
+func NewGRPCServer(endpoints addendpoint.Set, otTracer stdopentracing.Tracer, zipkinTracer *stdzipkin.Tracer, logger log.Logger) pb.AddServer {
+	// Zipkin GRPC Server Trace can either be instantiated per endpoint with a
+	// provided operation name or a global tracing service can be instantiated
+	// without an operation name and fed to each Go kit endpoint as ServerOption.
+	// In the latter case, the operation name will be the endpoint's grpc method
+	// path.
+	// We demonstrate a global tracing service here.
+	zipkinServer := zipkin.GRPCServerTrace(zipkinTracer)
+
 	options := []grpctransport.ServerOption{
 		grpctransport.ServerErrorLogger(logger),
+		zipkinServer,
 	}
+
 	return &grpcServer{
 		sum: grpctransport.NewServer(
 			endpoints.SumEndpoint,
 			decodeGRPCSumRequest,
 			encodeGRPCSumResponse,
-			append(options, grpctransport.ServerBefore(opentracing.GRPCToContext(tracer, "Sum", logger)))...,
+			append(options, grpctransport.ServerBefore(opentracing.GRPCToContext(otTracer, "Sum", logger)))...,
 		),
 		concat: grpctransport.NewServer(
 			endpoints.ConcatEndpoint,
 			decodeGRPCConcatRequest,
 			encodeGRPCConcatResponse,
-			append(options, grpctransport.ServerBefore(opentracing.GRPCToContext(tracer, "Concat", logger)))...,
+			append(options, grpctransport.ServerBefore(opentracing.GRPCToContext(otTracer, "Concat", logger)))...,
 		),
 	}
 }
@@ -70,13 +82,25 @@ func (s *grpcServer) Concat(ctx oldcontext.Context, req *pb.ConcatRequest) (*pb.
 // of the conn. The caller is responsible for constructing the conn, and
 // eventually closing the underlying transport. We bake-in certain middlewares,
 // implementing the client library pattern.
-func NewGRPCClient(conn *grpc.ClientConn, tracer stdopentracing.Tracer, logger log.Logger) addservice.Service {
+func NewGRPCClient(conn *grpc.ClientConn, otTracer stdopentracing.Tracer, zipkinTracer *stdzipkin.Tracer, logger log.Logger) addservice.Service {
 	// We construct a single ratelimiter middleware, to limit the total outgoing
 	// QPS from this client to all methods on the remote instance. We also
 	// construct per-endpoint circuitbreaker middlewares to demonstrate how
 	// that's done, although they could easily be combined into a single breaker
 	// for the entire remote instance, too.
 	limiter := ratelimit.NewErroringLimiter(rate.NewLimiter(rate.Every(time.Second), 100))
+
+	// Zipkin GRPC Client Trace can either be instantiated per endpoint with a
+	// provided operation name or a global tracing client can be instantiated
+	// without an operation name and fed to each Go kit endpoint as ClientOption.
+	// In the latter case, the operation name will be the endpoint's grpc method
+	// path.
+	zipkinClient := zipkin.GRPCClientTrace(zipkinTracer)
+
+	// global client middlewares
+	options := []grpctransport.ClientOption{
+		zipkinClient,
+	}
 
 	// Each individual endpoint is an http/transport.Client (which implements
 	// endpoint.Endpoint) that gets wrapped with various middlewares. If you
@@ -91,9 +115,13 @@ func NewGRPCClient(conn *grpc.ClientConn, tracer stdopentracing.Tracer, logger l
 			encodeGRPCSumRequest,
 			decodeGRPCSumResponse,
 			pb.SumReply{},
-			grpctransport.ClientBefore(opentracing.ContextToGRPC(tracer, logger)),
+			append(options, grpctransport.ClientBefore(opentracing.ContextToGRPC(otTracer, logger)))...,
 		).Endpoint()
-		sumEndpoint = opentracing.TraceClient(tracer, "Sum")(sumEndpoint)
+		sumEndpoint = opentracing.TraceClient(otTracer, "Sum")(sumEndpoint)
+		// For additional information TraceEndpoint is added as endpoint middleware.
+		// If instantiating per endpoint ClientTracers on the Go kit gRPC client,
+		// you might not want this additional middleware and thus could be omitted.
+		sumEndpoint = zipkin.TraceEndpoint(zipkinTracer, "Sum")(sumEndpoint)
 		sumEndpoint = limiter(sumEndpoint)
 		sumEndpoint = circuitbreaker.Gobreaker(gobreaker.NewCircuitBreaker(gobreaker.Settings{
 			Name:    "Sum",
@@ -112,9 +140,13 @@ func NewGRPCClient(conn *grpc.ClientConn, tracer stdopentracing.Tracer, logger l
 			encodeGRPCConcatRequest,
 			decodeGRPCConcatResponse,
 			pb.ConcatReply{},
-			grpctransport.ClientBefore(opentracing.ContextToGRPC(tracer, logger)),
+			append(options, grpctransport.ClientBefore(opentracing.ContextToGRPC(otTracer, logger)))...,
 		).Endpoint()
-		concatEndpoint = opentracing.TraceClient(tracer, "Concat")(concatEndpoint)
+		concatEndpoint = opentracing.TraceClient(otTracer, "Concat")(concatEndpoint)
+		// For additional information TraceEndpoint is added as endpoint middleware.
+		// If instantiating per endpoint ClientTracers on the Go kit gRPC client,
+		// you might not want this additional middleware and thus could be omitted.
+		concatEndpoint = zipkin.TraceEndpoint(zipkinTracer, "Concat")(concatEndpoint)
 		concatEndpoint = limiter(concatEndpoint)
 		concatEndpoint = circuitbreaker.Gobreaker(gobreaker.NewCircuitBreaker(gobreaker.Settings{
 			Name:    "Concat",
