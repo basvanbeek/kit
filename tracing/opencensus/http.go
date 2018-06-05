@@ -14,7 +14,7 @@ import (
 // HTTPClientTrace enables native OpenCensus tracing of a Go kit HTTP transport
 // Client.
 func HTTPClientTrace(options ...TracerOption) kithttp.ClientOption {
-	config := tracerOptions{
+	config := TracerOptions{
 		name: "",
 		// public:    true,
 		sampler:   trace.AlwaysSample(),
@@ -93,7 +93,7 @@ func HTTPClientTrace(options ...TracerOption) kithttp.ClientOption {
 // HTTPServerTrace enables native OpenCensus tracing of a Go kit HTTP transport
 // Server.
 func HTTPServerTrace(options ...TracerOption) kithttp.ServerOption {
-	config := tracerOptions{
+	config := TracerOptions{
 		name: "",
 		//public:    true,
 		sampler:   trace.AlwaysSample(),

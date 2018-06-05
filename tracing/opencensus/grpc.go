@@ -18,7 +18,7 @@ const propagationKey = "grpc-trace-bin"
 // GRPCClientTrace enables native OpenCensus tracing of a Go kit gRPC transport
 // Client.
 func GRPCClientTrace(options ...TracerOption) kitgrpc.ClientOption {
-	config := tracerOptions{
+	config := TracerOptions{
 		name:    "",
 		sampler: trace.AlwaysSample(),
 		// logger:  log.NewNopLogger(),
@@ -76,7 +76,7 @@ func GRPCClientTrace(options ...TracerOption) kitgrpc.ClientOption {
 // GRPCServerTrace enables native Zipkin tracing of a Go kit gRPC transport
 // Server.
 func GRPCServerTrace(options ...TracerOption) kitgrpc.ServerOption {
-	config := tracerOptions{
+	config := TracerOptions{
 		name:   "",
 		logger: log.NewNopLogger(),
 	}
