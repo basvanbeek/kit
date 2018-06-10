@@ -3,7 +3,6 @@ package opencensus_test
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -30,11 +29,6 @@ var (
 	err4 = errors.New("otherBusinessError")
 )
 
-type recordingExporter struct {
-	mu   sync.Mutex
-	data []*trace.SpanData
-}
-
 type failedResponse struct {
 	err error
 }
@@ -50,22 +44,6 @@ func passEndpoint(_ context.Context, req interface{}) (interface{}, error) {
 		return nil, err
 	}
 	return req, nil
-}
-
-func (e *recordingExporter) ExportSpan(d *trace.SpanData) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	e.data = append(e.data, d)
-}
-
-func (e *recordingExporter) Get() (data []*trace.SpanData) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	data = e.data
-	e.data = nil
-	return
 }
 
 func TestTraceEndpoint(t *testing.T) {

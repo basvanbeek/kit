@@ -76,7 +76,10 @@ func HTTPClientTrace(options ...TracerOption) kithttp.ClientOption {
 		func(ctx context.Context, err error) {
 			if span := trace.FromContext(ctx); span != nil {
 				if err != nil {
-					span.SetStatus(trace.Status{Code: 2, Message: err.Error()})
+					span.SetStatus(trace.Status{
+						Code:    trace.StatusCodeUnknown,
+						Message: err.Error(),
+					})
 				}
 				span.End()
 			}
