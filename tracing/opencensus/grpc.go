@@ -17,7 +17,6 @@ const propagationKey = "grpc-trace-bin"
 // GRPCClientTrace enables OpenCensus tracing of a Go kit gRPC transport client.
 func GRPCClientTrace(options ...TracerOption) kitgrpc.ClientOption {
 	config := TracerOptions{
-		name:    "",
 		sampler: trace.AlwaysSample(),
 	}
 
@@ -44,8 +43,11 @@ func GRPCClientTrace(options ...TracerOption) kitgrpc.ClientOption {
 				},
 			)
 
-			traceContextBinary := string(propagation.Binary(span.SpanContext()))
-			(*md)[propagationKey] = append((*md)[propagationKey], traceContextBinary)
+			if !config.public {
+				traceContextBinary := string(propagation.Binary(span.SpanContext()))
+				(*md)[propagationKey] = append((*md)[propagationKey], traceContextBinary)
+			}
+
 			return trace.NewContext(ctx, span)
 		},
 	)
@@ -82,8 +84,9 @@ func GRPCServerTrace(options ...TracerOption) kitgrpc.ServerOption {
 	serverBefore := kitgrpc.ServerBefore(
 		func(ctx context.Context, md metadata.MD) context.Context {
 			var (
-				ok   bool
-				name string
+				spanContext trace.SpanContext
+				ok          bool
+				name        string
 			)
 
 			if config.name != "" {
@@ -101,8 +104,8 @@ func GRPCServerTrace(options ...TracerOption) kitgrpc.ServerOption {
 
 			if len(traceContext) > 0 {
 				traceContextBinary := []byte(traceContext[0])
-				spanContext, ok := propagation.FromBinary(traceContextBinary)
-				if ok {
+				spanContext, ok = propagation.FromBinary(traceContextBinary)
+				if ok && !config.public {
 					ctx, _ = trace.StartSpanWithRemoteParent(
 						ctx,
 						name,
@@ -113,13 +116,21 @@ func GRPCServerTrace(options ...TracerOption) kitgrpc.ServerOption {
 					return ctx
 				}
 			}
-			ctx, _ = trace.StartSpan(
+			ctx, span := trace.StartSpan(
 				ctx,
 				name,
 				trace.WithSpanKind(trace.SpanKindServer),
 				trace.WithSampler(config.sampler),
 			)
-
+			if ok {
+				span.AddLink(
+					trace.Link{
+						TraceID: spanContext.TraceID,
+						SpanID:  spanContext.SpanID,
+						Type:    trace.LinkTypeChild,
+					},
+				)
+			}
 			return ctx
 		},
 	)
