@@ -3,27 +3,43 @@ package opencensus_test
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"testing"
 
-	"go.opencensus.io/plugin/ochttp"
 	"go.opencensus.io/trace"
+	"go.opencensus.io/trace/propagation"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/go-kit/kit/endpoint"
 	ockit "github.com/go-kit/kit/tracing/opencensus"
-	kithttp "github.com/go-kit/kit/transport/http"
+	grpctransport "github.com/go-kit/kit/transport/grpc"
 )
 
-func TestHttpClientTrace(t *testing.T) {
-	var (
-		err     error
-		rec     = &recordingExporter{}
-		rURL, _ = url.Parse("http://test.com/dummy/path")
-	)
+type dummy struct{}
+
+const traceContextKey = "grpc-trace-bin"
+
+func unaryInterceptor(
+	ctx context.Context, method string, req, reply interface{},
+	cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption,
+) error {
+	return nil
+}
+
+func TestGRPCClientTrace(t *testing.T) {
+	rec := &recordingExporter{}
 
 	trace.RegisterExporter(rec)
+
+	cc, err := grpc.Dial(
+		"",
+		grpc.WithUnaryInterceptor(unaryInterceptor),
+		grpc.WithInsecure(),
+	)
+	if err != nil {
+		t.Fatalf("unable to create gRPC dialer: %s", err.Error())
+	}
 
 	traces := []struct {
 		name string
@@ -35,17 +51,19 @@ func TestHttpClientTrace(t *testing.T) {
 	}
 
 	for _, tr := range traces {
+		clientTracer := ockit.GRPCClientTrace(ockit.WithName(tr.name))
 
-		clientTracer := ockit.HTTPClientTrace(ockit.WithName(tr.name))
-		ep := kithttp.NewClient(
-			"GET",
-			rURL,
-			func(ctx context.Context, r *http.Request, i interface{}) error {
-				return nil
+		ep := grpctransport.NewClient(
+			cc,
+			"dummyService",
+			"dummyMethod",
+			func(context.Context, interface{}) (interface{}, error) {
+				return nil, nil
 			},
-			func(ctx context.Context, r *http.Response) (response interface{}, err error) {
+			func(context.Context, interface{}) (interface{}, error) {
 				return nil, tr.err
 			},
+			dummy{},
 			clientTracer,
 		).Endpoint()
 
@@ -60,7 +78,6 @@ func TestHttpClientTrace(t *testing.T) {
 		if want, have := 1, len(spans); want != have {
 			t.Fatalf("incorrect number of spans, want %d, have %d", want, have)
 		}
-
 		span := spans[0]
 		if want, have := parentSpan.SpanContext().SpanID, span.ParentSpanID; want != have {
 			t.Errorf("incorrect parent ID, want %s, have %s", want, have)
@@ -70,7 +87,7 @@ func TestHttpClientTrace(t *testing.T) {
 			t.Errorf("incorrect span name, want %s, have %s", want, have)
 		}
 
-		if want, have := "GET /dummy/path", span.Name; want != have && tr.name == "" {
+		if want, have := "/dummyService/dummyMethod", span.Name; want != have && tr.name == "" {
 			t.Errorf("incorrect span name, want %s, have %s", want, have)
 		}
 
@@ -89,7 +106,7 @@ func TestHttpClientTrace(t *testing.T) {
 	}
 }
 
-func TestHTTPServerTrace(t *testing.T) {
+func TestGRPCServerTrace(t *testing.T) {
 	rec := &recordingExporter{}
 
 	trace.RegisterExporter(rec)
@@ -106,54 +123,45 @@ func TestHTTPServerTrace(t *testing.T) {
 	}
 
 	for _, tr := range traces {
-		var client http.Client
-
-		handler := kithttp.NewServer(
-			endpoint.Nop,
-			func(context.Context, *http.Request) (interface{}, error) { return nil, nil },
-			func(context.Context, http.ResponseWriter, interface{}) error { return errors.New("dummy") },
-			ockit.HTTPServerTrace(ockit.WithName(tr.name)),
+		var (
+			ctx        = context.Background()
+			parentSpan *trace.Span
 		)
 
-		server := httptest.NewServer(handler)
-		defer server.Close()
-
-		const httpMethod = "GET"
-
-		req, err := http.NewRequest(httpMethod, server.URL, nil)
-		if err != nil {
-			t.Fatalf("unable to create HTTP request: %s", err.Error())
-		}
+		server := grpctransport.NewServer(
+			endpoint.Nop,
+			func(context.Context, interface{}) (interface{}, error) {
+				return nil, nil
+			},
+			func(context.Context, interface{}) (interface{}, error) {
+				return nil, tr.err
+			},
+			ockit.GRPCServerTrace(ockit.WithName(tr.name)),
+		)
 
 		if tr.useParent {
-			client = http.Client{
-				Transport: &ochttp.Transport{},
-			}
+			_, parentSpan = trace.StartSpan(context.Background(), "test")
+			traceContextBinary := propagation.Binary(parentSpan.SpanContext())
+
+			md := metadata.MD{}
+			md.Set(traceContextKey, string(traceContextBinary))
+			ctx = metadata.NewIncomingContext(ctx, md)
 		}
 
-		resp, err := client.Do(req.WithContext(context.Background()))
-		if err != nil {
-			t.Fatalf("unable to send HTTP request: %s", err.Error())
-		}
-		resp.Body.Close()
+		server.ServeGRPC(ctx, nil)
 
 		spans := rec.Get()
 
-		expectedSpans := 1
-		if tr.useParent {
-			expectedSpans++
-		}
-
-		if want, have := expectedSpans, len(spans); want != have {
+		if want, have := 1, len(spans); want != have {
 			t.Fatalf("incorrect number of spans, want %d, have %d", want, have)
 		}
 
 		if tr.useParent {
-			if want, have := spans[1].TraceID, spans[0].TraceID; want != have {
+			if want, have := parentSpan.SpanContext().TraceID, spans[0].TraceID; want != have {
 				t.Errorf("incorrect trace ID, want %s, have %s", want, have)
 			}
 
-			if want, have := spans[1].SpanID, spans[0].ParentSpanID; want != have {
+			if want, have := parentSpan.SpanContext().SpanID, spans[0].ParentSpanID; want != have {
 				t.Errorf("incorrect span ID, want %s, have %s", want, have)
 			}
 		}
@@ -162,8 +170,14 @@ func TestHTTPServerTrace(t *testing.T) {
 			t.Errorf("incorrect span name, want %s, have %s", want, have)
 		}
 
-		if want, have := "GET /", spans[0].Name; want != have && tr.name == "" {
-			t.Errorf("incorrect span name, want %s, have %s", want, have)
+		if tr.err != nil {
+			if want, have := int32(codes.Internal), spans[0].Status.Code; want != have {
+				t.Errorf("incorrect span status code, want %d, have %d", want, have)
+			}
+
+			if want, have := tr.err.Error(), spans[0].Status.Message; want != have {
+				t.Errorf("incorrect span status message, want %s, have %s", want, have)
+			}
 		}
 	}
 }

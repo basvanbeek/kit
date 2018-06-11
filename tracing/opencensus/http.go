@@ -15,10 +15,8 @@ import (
 // Client.
 func HTTPClientTrace(options ...TracerOption) kithttp.ClientOption {
 	config := TracerOptions{
-		name: "",
-		// public:    true,
-		sampler:   trace.AlwaysSample(),
-		propagate: &b3.HTTPFormat{},
+		sampler:       trace.AlwaysSample(),
+		httpPropagate: &b3.HTTPFormat{},
 	}
 
 	for _, option := range options {
@@ -52,8 +50,8 @@ func HTTPClientTrace(options ...TracerOption) kithttp.ClientOption {
 				trace.StringAttribute(ochttp.UserAgentAttribute, req.UserAgent()),
 			)
 
-			if config.propagate != nil {
-				config.propagate.SpanContextToRequest(span.SpanContext(), req)
+			if !config.public {
+				config.httpPropagate.SpanContextToRequest(span.SpanContext(), req)
 			}
 
 			return trace.NewContext(ctx, span)
@@ -99,8 +97,8 @@ func HTTPServerTrace(options ...TracerOption) kithttp.ServerOption {
 	config := TracerOptions{
 		name: "",
 		//public:    true,
-		sampler:   trace.AlwaysSample(),
-		propagate: &b3.HTTPFormat{},
+		sampler:       trace.AlwaysSample(),
+		httpPropagate: &b3.HTTPFormat{},
 	}
 
 	for _, option := range options {
@@ -113,6 +111,7 @@ func HTTPServerTrace(options ...TracerOption) kithttp.ServerOption {
 				spanContext trace.SpanContext
 				span        *trace.Span
 				name        string
+				ok          bool
 			)
 
 			if config.name != "" {
@@ -121,17 +120,25 @@ func HTTPServerTrace(options ...TracerOption) kithttp.ServerOption {
 				name = req.Method + " " + req.URL.Path
 			}
 
-			if config.propagate != nil {
-				spanContext, _ = config.propagate.SpanContextFromRequest(req)
+			if config.httpPropagate != nil {
+				spanContext, ok = config.httpPropagate.SpanContextFromRequest(req)
 			}
-
-			ctx, span = trace.StartSpanWithRemoteParent(
-				ctx,
-				name,
-				spanContext,
-				trace.WithSpanKind(trace.SpanKindServer),
-				trace.WithSampler(config.sampler),
-			)
+			if ok {
+				ctx, span = trace.StartSpanWithRemoteParent(
+					ctx,
+					name,
+					spanContext,
+					trace.WithSpanKind(trace.SpanKindServer),
+					trace.WithSampler(config.sampler),
+				)
+			} else {
+				ctx, span = trace.StartSpan(
+					ctx,
+					name,
+					trace.WithSpanKind(trace.SpanKindServer),
+					trace.WithSampler(config.sampler),
+				)
+			}
 
 			span.AddAttributes(
 				trace.StringAttribute(ochttp.MethodAttribute, req.Method),

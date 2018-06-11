@@ -22,7 +22,9 @@ func TraceEndpoint(name string, options ...EndpointOption) endpoint.Middleware {
 	if name == "" {
 		name = TraceEndpointDefaultName
 	}
+
 	cfg := &EndpointOptions{}
+
 	for _, o := range options {
 		o(cfg)
 	}
@@ -33,13 +35,16 @@ func TraceEndpoint(name string, options ...EndpointOption) endpoint.Middleware {
 			if len(cfg.Attributes) > 0 {
 				span.AddAttributes(cfg.Attributes...)
 			}
+			defer span.End()
+
 			defer func() {
 				if err != nil {
 					if lberr, ok := err.(lb.RetryError); ok {
+						// handle errors originating from lb.Retry
 						attrs := make([]trace.Attribute, 0, len(lberr.RawErrors))
-						for idx, err := range lberr.RawErrors {
+						for idx, rawErr := range lberr.RawErrors {
 							attrs = append(attrs, trace.StringAttribute(
-								"gokit.retry.error."+strconv.Itoa(idx+1), err.Error(),
+								"gokit.retry.error."+strconv.Itoa(idx+1), rawErr.Error(),
 							))
 						}
 						span.AddAttributes(attrs...)
@@ -47,40 +52,38 @@ func TraceEndpoint(name string, options ...EndpointOption) endpoint.Middleware {
 							Code:    trace.StatusCodeUnknown,
 							Message: lberr.Final.Error(),
 						})
-					} else {
-						span.SetStatus(trace.Status{
-							Code:    trace.StatusCodeUnknown,
-							Message: err.Error(),
-						})
+						return
 					}
-				} else if res, ok := response.(failer); ok {
-					if err = res.Failed(); err != nil {
-						span.AddAttributes(
-							trace.StringAttribute("gokit.business.error", err.Error()),
-						)
-						if cfg.IgnoreBusinessError {
-							span.SetStatus(trace.Status{Code: trace.StatusCodeOK})
-						} else {
-							span.SetStatus(trace.Status{
-								Code:    trace.StatusCodeUnknown,
-								Message: err.Error(),
-							})
-						}
-					}
-				} else {
-					span.SetStatus(trace.Status{Code: trace.StatusCodeOK})
+					// generic error
+					span.SetStatus(trace.Status{
+						Code:    trace.StatusCodeUnknown,
+						Message: err.Error(),
+					})
+					return
 				}
-				span.End()
+
+				// test for business error
+				if res, ok := response.(endpoint.Failer); ok && res.Failed() != nil {
+					span.AddAttributes(
+						trace.StringAttribute("gokit.business.error", res.Failed().Error()),
+					)
+					if cfg.IgnoreBusinessError {
+						span.SetStatus(trace.Status{Code: trace.StatusCodeOK})
+						return
+					}
+					// treating business error as real error in span.
+					span.SetStatus(trace.Status{
+						Code:    trace.StatusCodeUnknown,
+						Message: res.Failed().Error(),
+					})
+					return
+				}
+
+				// no errors identified
+				span.SetStatus(trace.Status{Code: trace.StatusCodeOK})
 			}()
 			response, err = next(ctx, request)
 			return
 		}
 	}
-}
-
-// failer is a Go kit idiomatic interface as shown in the addsvc example.
-// a typical response payload which can hold business logic er§rors should
-// implement the Failed() method.
-type failer interface {
-	Failed() error
 }

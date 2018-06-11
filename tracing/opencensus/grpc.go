@@ -21,7 +21,6 @@ func GRPCClientTrace(options ...TracerOption) kitgrpc.ClientOption {
 	config := TracerOptions{
 		name:    "",
 		sampler: trace.AlwaysSample(),
-		// logger:  log.NewNopLogger(),
 	}
 
 	for _, option := range options {
@@ -49,19 +48,20 @@ func GRPCClientTrace(options ...TracerOption) kitgrpc.ClientOption {
 
 			traceContextBinary := string(propagation.Binary(span.SpanContext()))
 			(*md)[propagationKey] = append((*md)[propagationKey], traceContextBinary)
-			return ctx
+			return trace.NewContext(ctx, span)
 		},
 	)
 
 	clientFinalizer := kitgrpc.ClientFinalizer(
 		func(ctx context.Context, err error) {
-			span := trace.FromContext(ctx)
-
-			s, ok := status.FromError(err)
-			if ok {
-				span.SetStatus(trace.Status{Code: int32(s.Code()), Message: s.Message()})
-			} else {
-				span.SetStatus(trace.Status{Code: int32(codes.Internal), Message: err.Error()})
+			if span := trace.FromContext(ctx); span != nil {
+				s, ok := status.FromError(err)
+				if ok {
+					span.SetStatus(trace.Status{Code: int32(s.Code()), Message: s.Message()})
+				} else {
+					span.SetStatus(trace.Status{Code: int32(codes.Unknown), Message: err.Error()})
+				}
+				span.End()
 			}
 		},
 	)
@@ -108,7 +108,7 @@ func GRPCServerTrace(options ...TracerOption) kitgrpc.ServerOption {
 				traceContextBinary := []byte(traceContext[0])
 				spanContext, ok := propagation.FromBinary(traceContextBinary)
 				if ok {
-					ctx, _ := trace.StartSpanWithRemoteParent(
+					ctx, _ = trace.StartSpanWithRemoteParent(
 						ctx,
 						name,
 						spanContext,
@@ -131,13 +131,14 @@ func GRPCServerTrace(options ...TracerOption) kitgrpc.ServerOption {
 
 	serverFinalizer := kitgrpc.ServerFinalizer(
 		func(ctx context.Context, err error) {
-			span := trace.FromContext(ctx)
-
-			s, ok := status.FromError(err)
-			if ok {
-				span.SetStatus(trace.Status{Code: int32(s.Code()), Message: s.Message()})
-			} else {
-				span.SetStatus(trace.Status{Code: int32(codes.Internal), Message: err.Error()})
+			if span := trace.FromContext(ctx); span != nil {
+				s, ok := status.FromError(err)
+				if ok {
+					span.SetStatus(trace.Status{Code: int32(s.Code()), Message: s.Message()})
+				} else {
+					span.SetStatus(trace.Status{Code: int32(codes.Internal), Message: err.Error()})
+				}
+				span.End()
 			}
 		},
 	)

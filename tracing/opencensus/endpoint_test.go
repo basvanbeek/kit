@@ -29,15 +29,14 @@ var (
 	err4 = errors.New("otherBusinessError")
 )
 
+// compile time assertion
+var _ endpoint.Failer = failedResponse{}
+
 type failedResponse struct {
 	err error
 }
 
 func (r failedResponse) Failed() error { return r.err }
-
-type failer interface {
-	Failed() error
-}
 
 func passEndpoint(_ context.Context, req interface{}) (interface{}, error) {
 	if err, _ := req.(error); err != nil {
