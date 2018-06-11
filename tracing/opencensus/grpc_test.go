@@ -74,7 +74,7 @@ func TestGRPCClientTrace(t *testing.T) {
 			t.Fatalf("unexpected error, want %s, have %s", tr.err.Error(), err.Error())
 		}
 
-		spans := rec.Get()
+		spans := rec.Flush()
 		if want, have := 1, len(spans); want != have {
 			t.Fatalf("incorrect number of spans, want %d, have %d", want, have)
 		}
@@ -150,7 +150,7 @@ func TestGRPCServerTrace(t *testing.T) {
 
 		server.ServeGRPC(ctx, nil)
 
-		spans := rec.Get()
+		spans := rec.Flush()
 
 		if want, have := 1, len(spans); want != have {
 			t.Fatalf("incorrect number of spans, want %d, have %d", want, have)

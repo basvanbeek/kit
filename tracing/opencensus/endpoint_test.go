@@ -81,7 +81,7 @@ func TestTraceEndpoint(t *testing.T) {
 	mw(passEndpoint)(ctx, failedResponse{err: err4})
 
 	// check span count
-	spans := e.Get()
+	spans := e.Flush()
 	if want, have := 5, len(spans); want != have {
 		t.Fatalf("incorrected number of spans, wanted %d, got %d", want, have)
 	}

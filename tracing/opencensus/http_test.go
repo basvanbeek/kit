@@ -9,7 +9,10 @@ import (
 	"testing"
 
 	"go.opencensus.io/plugin/ochttp"
+	"go.opencensus.io/plugin/ochttp/propagation/b3"
+	"go.opencensus.io/plugin/ochttp/propagation/tracecontext"
 	"go.opencensus.io/trace"
+	"go.opencensus.io/trace/propagation"
 
 	"github.com/go-kit/kit/endpoint"
 	ockit "github.com/go-kit/kit/tracing/opencensus"
@@ -56,7 +59,7 @@ func TestHttpClientTrace(t *testing.T) {
 			t.Fatalf("unexpected error, want %s, have %s", tr.err.Error(), err.Error())
 		}
 
-		spans := rec.Get()
+		spans := rec.Flush()
 		if want, have := 1, len(spans); want != have {
 			t.Fatalf("incorrect number of spans, want %d, have %d", want, have)
 		}
@@ -95,14 +98,15 @@ func TestHTTPServerTrace(t *testing.T) {
 	trace.RegisterExporter(rec)
 
 	traces := []struct {
-		useParent bool
-		name      string
-		err       error
+		useParent   bool
+		name        string
+		err         error
+		propagation propagation.HTTPFormat
 	}{
-		{false, "", nil},
-		{true, "", nil},
-		{true, "CustomName", nil},
-		{true, "", errors.New("dummy-error")},
+		{false, "", nil, nil},
+		{true, "", nil, nil},
+		{true, "CustomName", nil, &b3.HTTPFormat{}},
+		{true, "", errors.New("dummy-error"), &tracecontext.HTTPFormat{}},
 	}
 
 	for _, tr := range traces {
@@ -112,7 +116,10 @@ func TestHTTPServerTrace(t *testing.T) {
 			endpoint.Nop,
 			func(context.Context, *http.Request) (interface{}, error) { return nil, nil },
 			func(context.Context, http.ResponseWriter, interface{}) error { return errors.New("dummy") },
-			ockit.HTTPServerTrace(ockit.WithName(tr.name)),
+			ockit.HTTPServerTrace(
+				ockit.WithName(tr.name),
+				ockit.WithHTTPPropagation(tr.propagation),
+			),
 		)
 
 		server := httptest.NewServer(handler)
@@ -127,7 +134,9 @@ func TestHTTPServerTrace(t *testing.T) {
 
 		if tr.useParent {
 			client = http.Client{
-				Transport: &ochttp.Transport{},
+				Transport: &ochttp.Transport{
+					Propagation: tr.propagation,
+				},
 			}
 		}
 
@@ -137,7 +146,7 @@ func TestHTTPServerTrace(t *testing.T) {
 		}
 		resp.Body.Close()
 
-		spans := rec.Get()
+		spans := rec.Flush()
 
 		expectedSpans := 1
 		if tr.useParent {

@@ -11,8 +11,7 @@ import (
 	kithttp "github.com/go-kit/kit/transport/http"
 )
 
-// HTTPClientTrace enables native OpenCensus tracing of a Go kit HTTP transport
-// Client.
+// HTTPClientTrace enables OpenCensus tracing of a Go kit HTTP transport client.
 func HTTPClientTrace(options ...TracerOption) kithttp.ClientOption {
 	config := TracerOptions{
 		sampler:       trace.AlwaysSample(),
@@ -91,12 +90,9 @@ func HTTPClientTrace(options ...TracerOption) kithttp.ClientOption {
 	}
 }
 
-// HTTPServerTrace enables native OpenCensus tracing of a Go kit HTTP transport
-// Server.
+// HTTPServerTrace enables OpenCensus tracing of a Go kit HTTP transport server.
 func HTTPServerTrace(options ...TracerOption) kithttp.ServerOption {
 	config := TracerOptions{
-		name: "",
-		//public:    true,
 		sampler:       trace.AlwaysSample(),
 		httpPropagate: &b3.HTTPFormat{},
 	}
@@ -120,10 +116,8 @@ func HTTPServerTrace(options ...TracerOption) kithttp.ServerOption {
 				name = req.Method + " " + req.URL.Path
 			}
 
-			if config.httpPropagate != nil {
-				spanContext, ok = config.httpPropagate.SpanContextFromRequest(req)
-			}
-			if ok {
+			spanContext, ok = config.httpPropagate.SpanContextFromRequest(req)
+			if ok && !config.public {
 				ctx, span = trace.StartSpanWithRemoteParent(
 					ctx,
 					name,
@@ -138,6 +132,14 @@ func HTTPServerTrace(options ...TracerOption) kithttp.ServerOption {
 					trace.WithSpanKind(trace.SpanKindServer),
 					trace.WithSampler(config.sampler),
 				)
+				if ok {
+					span.AddLink(trace.Link{
+						TraceID:    spanContext.TraceID,
+						SpanID:     spanContext.SpanID,
+						Type:       trace.LinkTypeChild,
+						Attributes: nil,
+					})
+				}
 			}
 
 			span.AddAttributes(

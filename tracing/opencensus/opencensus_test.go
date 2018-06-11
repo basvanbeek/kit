@@ -18,7 +18,7 @@ func (e *recordingExporter) ExportSpan(d *trace.SpanData) {
 	e.data = append(e.data, d)
 }
 
-func (e *recordingExporter) Get() (data []*trace.SpanData) {
+func (e *recordingExporter) Flush() (data []*trace.SpanData) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 

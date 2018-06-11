@@ -4,8 +4,6 @@ import (
 	"go.opencensus.io/plugin/ochttp/propagation/b3"
 	"go.opencensus.io/trace"
 	"go.opencensus.io/trace/propagation"
-
-	"github.com/go-kit/kit/log"
 )
 
 // defaultHTTPPropagate holds OpenCensus' default HTTP propagation format which
@@ -39,16 +37,6 @@ func WithName(name string) TracerOption {
 	}
 }
 
-// WithLogger adds a Go kit logger to our OpenCensus Middleware to log SpanContext
-// extract / inject errors if they occur. Default is Noop.
-func WithLogger(logger log.Logger) TracerOption {
-	return func(o *TracerOptions) {
-		if logger != nil {
-			o.logger = logger
-		}
-	}
-}
-
 // IsPublic should be set to true for publicly accessible servers and for
 // clients that should not propagate their current trace metadata.
 // On the server side a new trace will always be started regardless of any
@@ -67,6 +55,7 @@ func WithHTTPPropagation(p propagation.HTTPFormat) TracerOption {
 		if p == nil {
 			// reset to default OC HTTP format
 			o.httpPropagate = defaultHTTPPropagate
+			return
 		}
 		o.httpPropagate = p
 	}
@@ -76,7 +65,6 @@ func WithHTTPPropagation(p propagation.HTTPFormat) TracerOption {
 type TracerOptions struct {
 	sampler       trace.Sampler
 	name          string
-	logger        log.Logger
 	public        bool
 	httpPropagate propagation.HTTPFormat
 }

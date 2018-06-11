@@ -9,14 +9,12 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/go-kit/kit/log"
 	kitgrpc "github.com/go-kit/kit/transport/grpc"
 )
 
 const propagationKey = "grpc-trace-bin"
 
-// GRPCClientTrace enables native OpenCensus tracing of a Go kit gRPC transport
-// Client.
+// GRPCClientTrace enables OpenCensus tracing of a Go kit gRPC transport client.
 func GRPCClientTrace(options ...TracerOption) kitgrpc.ClientOption {
 	config := TracerOptions{
 		name:    "",
@@ -73,13 +71,9 @@ func GRPCClientTrace(options ...TracerOption) kitgrpc.ClientOption {
 
 }
 
-// GRPCServerTrace enables native Zipkin tracing of a Go kit gRPC transport
-// Server.
+// GRPCServerTrace enables OpenCensus tracing of a Go kit gRPC transport server.
 func GRPCServerTrace(options ...TracerOption) kitgrpc.ServerOption {
-	config := TracerOptions{
-		name:   "",
-		logger: log.NewNopLogger(),
-	}
+	config := TracerOptions{}
 
 	for _, option := range options {
 		option(&config)
@@ -88,18 +82,19 @@ func GRPCServerTrace(options ...TracerOption) kitgrpc.ServerOption {
 	serverBefore := kitgrpc.ServerBefore(
 		func(ctx context.Context, md metadata.MD) context.Context {
 			var (
+				ok   bool
 				name string
 			)
-
-			rpcMethod, ok := ctx.Value(kitgrpc.ContextKeyRequestMethod).(string)
-			if !ok {
-				config.logger.Log("unable to retrieve method name: missing gRPC interceptor hook")
-			}
 
 			if config.name != "" {
 				name = config.name
 			} else {
-				name = rpcMethod
+				name, ok = ctx.Value(kitgrpc.ContextKeyRequestMethod).(string)
+				if !ok || name == "" {
+					// we can't find the gRPC method. probably the
+					// unaryInterceptor was not wired up.
+					name = "unknown grpc method"
+				}
 			}
 
 			traceContext := md[propagationKey]
